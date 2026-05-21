@@ -1,4 +1,3 @@
-// main.ts
 const FALLBACK_PAGE = "https://ir-netlify.github.io/NETLIFY/new/new.html";
 
 const BLOCKED_HEADERS = [
@@ -7,15 +6,24 @@ const BLOCKED_HEADERS = [
   "upgrade", "forwarded", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port"
 ];
 
-Deno.serve(async (req: Request) => {
+const constructDestUrl = (domain, path, query) => {
+  if (domain.startsWith('http://') || domain.startsWith('https://')) {
+    return `${domain}${path}${query}`;
+  }
+  const isHttps = !domain.includes(':') || domain.includes(':443') || /^s\d+\./.test(domain);
+  return `${isHttps ? 'https://' : 'http://'}${domain}${path}${query}`;
+};
+
+// استاندارد Deno برای مدیریت درخواست‌های HTTP
+Deno.serve(async (req) => {
   try {
-    const url = new URL(req.url);
+    const parsedUrl = new URL(req.url);
     const destHost = req.headers.get("x-host");
 
-    // صفحه اصلی (fallback)
-    if (url.pathname === "/" && !destHost) {
-      const upgrade = (req.headers.get("upgrade") || "").toLowerCase();
-      if (upgrade !== "websocket") {
+    // هدایت مسیر اصلی در صورت نبود x-host
+    if (parsedUrl.pathname === "/" && !destHost) {
+      const wsCheck = (req.headers.get("upgrade") || "").toLowerCase();
+      if (wsCheck !== "websocket") {
         const fallbackRes = await fetch(FALLBACK_PAGE);
         return new Response(await fallbackRes.text(), {
           headers: { "content-type": "text/html; charset=UTF-8" },
@@ -27,44 +35,47 @@ Deno.serve(async (req: Request) => {
       return new Response("Invalid Request: Missing target host.", { status: 400 });
     }
 
-    // ساخت URL مقصد
-    const isHttps = !destHost.includes(':') || destHost.includes(':443') || /^s\d+\./.test(destHost);
-    const finalUrl = `${isHttps ? 'https://' : 'http://'}${destHost}${url.pathname}${url.search}`;
-
+    const finalUrl = constructDestUrl(destHost, parsedUrl.pathname, parsedUrl.search);
     const proxyHeaders = new Headers();
-    let clientAddress: string | null = null;
+    let clientAddress = null;
 
-    for (const [key, value] of req.headers) {
+    req.headers.forEach((value, key) => {
       const lowerKey = key.toLowerCase();
-      if (BLOCKED_HEADERS.includes(lowerKey) || 
-          lowerKey.startsWith("x-nf-") || 
-          lowerKey.startsWith("x-netlify-") || 
-          lowerKey === "x-host") {
-        continue;
+      if (BLOCKED_HEADERS.includes(lowerKey) || lowerKey.startsWith("x-nf-") || lowerKey.startsWith("x-netlify-") || lowerKey === "x-host") {
+        return;
       }
       
-      if (lowerKey === "x-real-ip" || lowerKey === "x-forwarded-for") {
+      if (lowerKey === "x-real-ip") {
+        clientAddress = value;
+        return;
+      }
+      if (lowerKey === "x-forwarded-for") {
         if (!clientAddress) clientAddress = value;
-        continue;
+        return;
       }
       proxyHeaders.set(lowerKey, value);
-    }
+    });
 
     if (clientAddress) {
       proxyHeaders.set("x-forwarded-for", clientAddress);
     }
 
-    const fetchConfig: RequestInit = {
-      method: req.method,
+    const reqMethod = req.method;
+    const fetchConfig = {
+      method: reqMethod,
       headers: proxyHeaders,
       redirect: "manual",
-      body: (req.method === "GET" || req.method === "HEAD") ? null : req.body,
+      body: (reqMethod === "GET" || reqMethod === "HEAD") ? undefined : req.body,
     };
 
     const serverRes = await fetch(finalUrl, fetchConfig);
+    const responseHeaders = new Headers();
     
-    const responseHeaders = new Headers(serverRes.headers);
-    responseHeaders.delete("transfer-encoding");
+    serverRes.headers.forEach((value, key) => {
+      if (key.toLowerCase() !== "transfer-encoding") {
+        responseHeaders.set(key, value);
+      }
+    });
 
     return new Response(serverRes.body, {
       status: serverRes.status,
@@ -72,7 +83,6 @@ Deno.serve(async (req: Request) => {
     });
 
   } catch (err) {
-    console.error(err);
     return new Response("Gateway Error: Connection Failed", { status: 502 });
   }
 });
