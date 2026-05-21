@@ -1,0 +1,14 @@
+{
+  "name": "my-custom-edge-worker",
+  "version": "1.0.4",
+  "description": "A private edge function for handling requests",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "build": "echo 'Ready'",
+    "dev": "netlify dev"
+  },
+  "devDependencies": {
+    "netlify-cli": "latest"
+  }
+}
